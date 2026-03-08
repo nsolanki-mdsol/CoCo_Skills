@@ -14,6 +14,7 @@ description: |
     Shares - shares, inbound shares, outbound shares, data sharing, share count
     Resource Monitors - resource monitor, monitors, credit quota
     Network Policies - network policy, network policies, IP whitelist, allowed IPs
+    Tags - tags, tag count, tag references, tagged objects, sensitive data, PII, classification, tag values
     Object Types - object types, objects by database, objects by schema, procedures, functions, stages, streams, tasks, pipes
     Iceberg Tables - iceberg, iceberg tables, iceberg count, iceberg by database, iceberg by schema, catalog integration, snowflake managed, externally managed, glue, polaris
     Summary - summary, inventory, all counts
