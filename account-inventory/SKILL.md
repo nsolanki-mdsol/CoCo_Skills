@@ -339,6 +339,210 @@ WHERE u.deleted_on IS NULL
 ORDER BY u.name;
 ```
 
+### Tags Count
+```sql
+-- Total tags count
+SELECT COUNT(*) AS tag_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAGS
+WHERE deleted IS NULL;
+
+-- Tags by database
+SELECT 
+    tag_database AS database_name,
+    COUNT(*) AS tag_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAGS
+WHERE deleted IS NULL
+GROUP BY tag_database
+ORDER BY tag_count DESC;
+
+-- Tags by database and schema
+SELECT 
+    tag_database AS database_name,
+    tag_schema AS schema_name,
+    COUNT(*) AS tag_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAGS
+WHERE deleted IS NULL
+GROUP BY tag_database, tag_schema
+ORDER BY tag_count DESC;
+
+-- Tags with details (name, allowed values, owner)
+SELECT 
+    tag_database,
+    tag_schema,
+    tag_name,
+    tag_owner,
+    allowed_values,
+    created,
+    last_altered
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAGS
+WHERE deleted IS NULL
+ORDER BY tag_database, tag_schema, tag_name;
+
+-- Tags with allowed values defined
+SELECT 
+    tag_database || '.' || tag_schema || '.' || tag_name AS fully_qualified_name,
+    allowed_values,
+    tag_owner
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAGS
+WHERE deleted IS NULL
+  AND allowed_values IS NOT NULL
+ORDER BY fully_qualified_name;
+
+-- Real-time tags count
+SHOW TAGS IN ACCOUNT;
+SELECT COUNT(*) AS tag_count FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
+-- Real-time tags with details
+SHOW TAGS IN ACCOUNT;
+SELECT "database_name", "schema_name", "name", "owner", "allowed_values", "created_on"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+ORDER BY "database_name", "schema_name", "name";
+```
+
+### Tag References (Tagged Objects)
+```sql
+-- Total tag references count (objects with tags)
+SELECT COUNT(*) AS tag_reference_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL;
+
+-- Tag references by object type
+SELECT 
+    domain AS object_type,
+    COUNT(*) AS reference_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+GROUP BY domain
+ORDER BY reference_count DESC;
+
+-- Tag references by tag name
+SELECT 
+    tag_database || '.' || tag_schema || '.' || tag_name AS tag_fqn,
+    COUNT(*) AS usage_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+GROUP BY tag_database, tag_schema, tag_name
+ORDER BY usage_count DESC
+LIMIT 20;
+
+-- Tag references by database
+SELECT 
+    object_database AS database_name,
+    COUNT(*) AS tagged_objects
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+  AND object_database IS NOT NULL
+GROUP BY object_database
+ORDER BY tagged_objects DESC;
+
+-- Tag value distribution (most common tag values)
+SELECT 
+    tag_database || '.' || tag_schema || '.' || tag_name AS tag_fqn,
+    tag_value,
+    COUNT(*) AS usage_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+GROUP BY tag_database, tag_schema, tag_name, tag_value
+ORDER BY usage_count DESC
+LIMIT 50;
+
+-- Tagged tables
+SELECT 
+    object_database || '.' || object_schema || '.' || object_name AS table_fqn,
+    tag_database || '.' || tag_schema || '.' || tag_name AS tag_fqn,
+    tag_value
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+  AND domain = 'TABLE'
+ORDER BY object_database, object_schema, object_name
+LIMIT 100;
+
+-- Tagged columns (useful for sensitive data tracking)
+SELECT 
+    object_database || '.' || object_schema || '.' || object_name AS table_fqn,
+    column_name,
+    tag_database || '.' || tag_schema || '.' || tag_name AS tag_fqn,
+    tag_value
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+  AND domain = 'COLUMN'
+ORDER BY object_database, object_schema, object_name, column_name
+LIMIT 100;
+
+-- Snowflake system tags (data classification)
+SELECT 
+    tag_name,
+    tag_value,
+    COUNT(*) AS column_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+  AND tag_database = 'SNOWFLAKE'
+  AND tag_schema = 'CORE'
+GROUP BY tag_name, tag_value
+ORDER BY tag_name, column_count DESC;
+
+-- PII/Sensitive data tagged columns (system classification)
+SELECT 
+    object_database || '.' || object_schema || '.' || object_name AS table_fqn,
+    column_name,
+    tag_name,
+    tag_value AS classification
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+  AND domain = 'COLUMN'
+  AND tag_database = 'SNOWFLAKE'
+  AND tag_schema = 'CORE'
+  AND tag_name IN ('SEMANTIC_CATEGORY', 'PRIVACY_CATEGORY')
+ORDER BY object_database, object_schema, object_name, column_name
+LIMIT 100;
+
+-- Objects by tag (find all objects with specific tag)
+-- Replace <TAG_DATABASE>, <TAG_SCHEMA>, <TAG_NAME> with actual values
+SELECT 
+    domain AS object_type,
+    object_database,
+    object_schema,
+    object_name,
+    column_name,
+    tag_value
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+  AND tag_database = '<TAG_DATABASE>'
+  AND tag_schema = '<TAG_SCHEMA>'
+  AND tag_name = '<TAG_NAME>'
+ORDER BY domain, object_database, object_schema, object_name;
+
+-- Untagged tables (tables without any tags)
+SELECT t.table_catalog, t.table_schema, t.table_name
+FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES t
+LEFT JOIN SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES tr
+    ON t.table_catalog = tr.object_database
+    AND t.table_schema = tr.object_schema
+    AND t.table_name = tr.object_name
+    AND tr.domain = 'TABLE'
+    AND tr.object_deleted IS NULL
+WHERE t.deleted IS NULL
+  AND t.table_type = 'BASE TABLE'
+  AND tr.tag_name IS NULL
+ORDER BY t.table_catalog, t.table_schema, t.table_name
+LIMIT 100;
+
+-- Tag summary by classification category
+SELECT 
+    CASE 
+        WHEN tag_name = 'PRIVACY_CATEGORY' THEN 'Privacy'
+        WHEN tag_name = 'SEMANTIC_CATEGORY' THEN 'Semantic'
+        ELSE 'Custom'
+    END AS category_type,
+    tag_value,
+    COUNT(*) AS count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+WHERE object_deleted IS NULL
+  AND domain = 'COLUMN'
+GROUP BY category_type, tag_value
+ORDER BY category_type, count DESC;
+```
+
 ### Iceberg Tables Count
 ```sql
 -- Total Iceberg tables count
