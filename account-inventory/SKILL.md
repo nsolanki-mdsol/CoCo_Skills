@@ -1,10 +1,9 @@
 ---
 name: account-inventory-local
-description: |
+description: | 
   Snowflake account inventory and statistics for administration, audits, and capacity planning.
-
   Topics:
-    Users - users, user count, accounts, service accounts, person users, user type, legacy service
+    Users - users, user count, accounts, service accounts, person users, user type, legacy service, accountadmin, securityadmin, sysadmin, privileged users, admin roles
     Databases - databases, db count, untagged databases, tagged databases
     Warehouses - warehouses, compute, wh count, gen1, gen2, generation, snowpark, snowpark-optimized, warehouse tag, tagged warehouses, untagged warehouses
     Roles - roles, role count, RBAC
@@ -110,6 +109,128 @@ SELECT name, login_name, email, type, created_on, last_success_login, disabled
 FROM SNOWFLAKE.ACCOUNT_USAGE.USERS
 WHERE deleted_on IS NULL
 ORDER BY created_on DESC;
+
+-- Users with ACCOUNTADMIN role
+SELECT DISTINCT 
+    u.name AS user_name,
+    u.login_name,
+    u.email,
+    u.type AS user_type,
+    u.disabled,
+    u.last_success_login,
+    'ACCOUNTADMIN' AS privileged_role
+FROM SNOWFLAKE.ACCOUNT_USAGE.USERS u
+JOIN SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS g 
+    ON u.name = g.grantee_name
+WHERE u.deleted_on IS NULL
+  AND g.deleted_on IS NULL
+  AND g.role = 'ACCOUNTADMIN'
+ORDER BY u.name;
+
+-- Users with SECURITYADMIN role
+SELECT DISTINCT 
+    u.name AS user_name,
+    u.login_name,
+    u.email,
+    u.type AS user_type,
+    u.disabled,
+    u.last_success_login,
+    'SECURITYADMIN' AS privileged_role
+FROM SNOWFLAKE.ACCOUNT_USAGE.USERS u
+JOIN SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS g 
+    ON u.name = g.grantee_name
+WHERE u.deleted_on IS NULL
+  AND g.deleted_on IS NULL
+  AND g.role = 'SECURITYADMIN'
+ORDER BY u.name;
+
+-- Users with SYSADMIN role
+SELECT DISTINCT 
+    u.name AS user_name,
+    u.login_name,
+    u.email,
+    u.type AS user_type,
+    u.disabled,
+    u.last_success_login,
+    'SYSADMIN' AS privileged_role
+FROM SNOWFLAKE.ACCOUNT_USAGE.USERS u
+JOIN SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS g 
+    ON u.name = g.grantee_name
+WHERE u.deleted_on IS NULL
+  AND g.deleted_on IS NULL
+  AND g.role = 'SYSADMIN'
+ORDER BY u.name;
+
+-- All users with privileged admin roles (ACCOUNTADMIN, SECURITYADMIN, SYSADMIN)
+SELECT DISTINCT 
+    u.name AS user_name,
+    u.login_name,
+    u.email,
+    u.type AS user_type,
+    u.disabled,
+    u.last_success_login,
+    g.role AS privileged_role
+FROM SNOWFLAKE.ACCOUNT_USAGE.USERS u
+JOIN SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS g 
+    ON u.name = g.grantee_name
+WHERE u.deleted_on IS NULL
+  AND g.deleted_on IS NULL
+  AND g.role IN ('ACCOUNTADMIN', 'SECURITYADMIN', 'SYSADMIN')
+ORDER BY g.role, u.name;
+
+-- Count of users by privileged admin role
+SELECT 
+    g.role AS privileged_role,
+    COUNT(DISTINCT u.name) AS user_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.USERS u
+JOIN SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS g 
+    ON u.name = g.grantee_name
+WHERE u.deleted_on IS NULL
+  AND g.deleted_on IS NULL
+  AND g.role IN ('ACCOUNTADMIN', 'SECURITYADMIN', 'SYSADMIN')
+GROUP BY g.role
+ORDER BY 
+    CASE g.role 
+        WHEN 'ACCOUNTADMIN' THEN 1 
+        WHEN 'SECURITYADMIN' THEN 2 
+        WHEN 'SYSADMIN' THEN 3 
+    END;
+
+-- Users with multiple privileged roles
+SELECT 
+    u.name AS user_name,
+    u.login_name,
+    u.email,
+    u.type AS user_type,
+    u.disabled,
+    LISTAGG(DISTINCT g.role, ', ') WITHIN GROUP (ORDER BY g.role) AS privileged_roles,
+    COUNT(DISTINCT g.role) AS role_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.USERS u
+JOIN SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS g 
+    ON u.name = g.grantee_name
+WHERE u.deleted_on IS NULL
+  AND g.deleted_on IS NULL
+  AND g.role IN ('ACCOUNTADMIN', 'SECURITYADMIN', 'SYSADMIN')
+GROUP BY u.name, u.login_name, u.email, u.type, u.disabled
+HAVING COUNT(DISTINCT g.role) > 1
+ORDER BY role_count DESC, u.name;
+
+-- Enabled users with ACCOUNTADMIN (security audit)
+SELECT 
+    u.name AS user_name,
+    u.login_name,
+    u.email,
+    u.type AS user_type,
+    u.last_success_login,
+    u.created_on
+FROM SNOWFLAKE.ACCOUNT_USAGE.USERS u
+JOIN SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS g 
+    ON u.name = g.grantee_name
+WHERE u.deleted_on IS NULL
+  AND g.deleted_on IS NULL
+  AND g.role = 'ACCOUNTADMIN'
+  AND u.disabled = 'false'
+ORDER BY u.last_success_login DESC NULLS LAST;
 ```
 
 ### Databases Count
