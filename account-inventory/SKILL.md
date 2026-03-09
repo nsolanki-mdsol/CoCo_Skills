@@ -5,8 +5,8 @@ description: |
 
   Topics:
     Users - users, user count, accounts, service accounts, person users, user type, legacy service
-    Databases - databases, db count
-    Warehouses - warehouses, compute, wh count
+    Databases - databases, db count, untagged databases, tagged databases
+    Warehouses - warehouses, compute, wh count, gen1, gen2, generation, snowpark, snowpark-optimized, warehouse tag, tagged warehouses, untagged warehouses
     Roles - roles, role count, RBAC
     Schemas - schemas, schema count
     Tables - tables, table count, objects
@@ -127,6 +127,96 @@ ORDER BY created DESC;
 
 -- Real-time count
 SELECT COUNT(*) AS database_count FROM INFORMATION_SCHEMA.DATABASES;
+
+-- Databases count by tag name
+SELECT 
+    tr.TAG_DATABASE || '.' || tr.TAG_SCHEMA || '.' || tr.TAG_NAME AS full_tag_name,
+    COUNT(DISTINCT tr.OBJECT_NAME) AS database_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES tr
+WHERE tr.DOMAIN = 'DATABASE'
+  AND tr.OBJECT_DELETED IS NULL
+GROUP BY full_tag_name
+ORDER BY database_count DESC;
+
+-- Databases count by tag name and value
+SELECT 
+    tr.TAG_DATABASE || '.' || tr.TAG_SCHEMA || '.' || tr.TAG_NAME AS full_tag_name,
+    tr.TAG_VALUE,
+    COUNT(DISTINCT tr.OBJECT_NAME) AS database_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES tr
+WHERE tr.DOMAIN = 'DATABASE'
+  AND tr.OBJECT_DELETED IS NULL
+GROUP BY full_tag_name, tr.TAG_VALUE
+ORDER BY full_tag_name, database_count DESC;
+
+-- Tagged vs untagged database count
+WITH all_databases AS (
+    SELECT DATABASE_NAME 
+    FROM SNOWFLAKE.ACCOUNT_USAGE.DATABASES 
+    WHERE deleted IS NULL
+),
+tagged_databases AS (
+    SELECT DISTINCT OBJECT_NAME AS database_name
+    FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+    WHERE DOMAIN = 'DATABASE'
+      AND OBJECT_DELETED IS NULL
+)
+SELECT 
+    CASE WHEN td.database_name IS NOT NULL THEN 'Tagged' ELSE 'Untagged' END AS status,
+    COUNT(*) AS database_count
+FROM all_databases ad
+LEFT JOIN tagged_databases td ON ad.DATABASE_NAME = td.database_name
+GROUP BY 1
+ORDER BY 1;
+
+-- List untagged databases
+WITH tagged_databases AS (
+    SELECT DISTINCT OBJECT_NAME AS database_name
+    FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+    WHERE DOMAIN = 'DATABASE'
+      AND OBJECT_DELETED IS NULL
+)
+SELECT 
+    d.DATABASE_NAME,
+    d.DATABASE_OWNER,
+    d.CREATED,
+    d.LAST_ALTERED
+FROM SNOWFLAKE.ACCOUNT_USAGE.DATABASES d
+WHERE d.deleted IS NULL
+  AND d.DATABASE_NAME NOT IN (SELECT database_name FROM tagged_databases)
+ORDER BY d.DATABASE_NAME;
+
+-- List untagged databases (excluding sandbox/dev patterns)
+WITH tagged_databases AS (
+    SELECT DISTINCT OBJECT_NAME AS database_name
+    FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+    WHERE DOMAIN = 'DATABASE'
+      AND OBJECT_DELETED IS NULL
+)
+SELECT 
+    d.DATABASE_NAME,
+    d.DATABASE_OWNER,
+    d.CREATED,
+    d.LAST_ALTERED
+FROM SNOWFLAKE.ACCOUNT_USAGE.DATABASES d
+WHERE d.deleted IS NULL
+  AND d.DATABASE_NAME NOT IN (SELECT database_name FROM tagged_databases)
+  AND d.DATABASE_NAME NOT ILIKE '%SANDBOX%'
+  AND d.DATABASE_NAME NOT ILIKE '%_DEV'
+  AND d.DATABASE_NAME NOT ILIKE 'DEV_%'
+  AND d.DATABASE_NAME NOT ILIKE '%_TEST'
+  AND d.DATABASE_NAME NOT ILIKE 'TEST_%'
+ORDER BY d.DATABASE_NAME;
+
+-- List databases with their tags
+SELECT 
+    tr.OBJECT_NAME AS database_name,
+    tr.TAG_DATABASE || '.' || tr.TAG_SCHEMA || '.' || tr.TAG_NAME AS full_tag_name,
+    tr.TAG_VALUE
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES tr
+WHERE tr.DOMAIN = 'DATABASE'
+  AND tr.OBJECT_DELETED IS NULL
+ORDER BY tr.OBJECT_NAME, full_tag_name;
 ```
 
 ### Warehouses Count
@@ -144,6 +234,175 @@ ORDER BY warehouse_name;
 
 -- Real-time using SHOW
 SHOW WAREHOUSES;
+
+-- Total warehouse count (real-time)
+SHOW WAREHOUSES;
+SELECT COUNT(*) AS warehouse_count FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
+-- Warehouses by size
+SHOW WAREHOUSES;
+SELECT 
+    "size" AS warehouse_size,
+    COUNT(*) AS count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+GROUP BY "size"
+ORDER BY count DESC;
+
+-- Warehouses by generation (Gen1 vs Gen2)
+-- Gen2 warehouses have improved performance and efficiency
+-- Legacy warehouses (NULL generation) are older warehouses before generations existed
+SHOW WAREHOUSES;
+SELECT 
+    COALESCE("generation"::VARCHAR, 'Legacy (None)') AS generation,
+    COUNT(*) AS count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+GROUP BY "generation"
+ORDER BY count DESC;
+
+-- Warehouses by type (Standard vs Snowpark-Optimized)
+-- SNOWPARK-OPTIMIZED warehouses have more memory per node for ML/data science workloads
+SHOW WAREHOUSES;
+SELECT 
+    "type" AS warehouse_type,
+    COUNT(*) AS count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+GROUP BY "type"
+ORDER BY count DESC;
+
+-- Warehouses by generation and type combined
+SHOW WAREHOUSES;
+SELECT 
+    COALESCE("generation"::VARCHAR, 'Legacy (None)') AS generation,
+    "type" AS warehouse_type,
+    COUNT(*) AS count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+GROUP BY "generation", "type"
+ORDER BY generation, warehouse_type;
+
+-- Warehouses by size and generation
+SHOW WAREHOUSES;
+SELECT 
+    "size" AS warehouse_size,
+    COALESCE("generation"::VARCHAR, 'Legacy') AS generation,
+    COUNT(*) AS count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+GROUP BY "size", "generation"
+ORDER BY "size", generation;
+
+-- Detailed warehouse list with generation and type
+SHOW WAREHOUSES;
+SELECT 
+    "name" AS warehouse_name,
+    "size" AS warehouse_size,
+    "type" AS warehouse_type,
+    COALESCE("generation"::VARCHAR, 'Legacy (None)') AS generation,
+    "state",
+    "auto_suspend",
+    "auto_resume",
+    "owner"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+ORDER BY "name";
+
+-- Snowpark-optimized warehouses only
+SHOW WAREHOUSES;
+SELECT 
+    "name" AS warehouse_name,
+    "size" AS warehouse_size,
+    COALESCE("generation"::VARCHAR, 'Legacy') AS generation,
+    "state",
+    "owner"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "type" = 'SNOWPARK-OPTIMIZED'
+ORDER BY "name";
+
+-- Gen2 warehouses only
+SHOW WAREHOUSES;
+SELECT 
+    "name" AS warehouse_name,
+    "size" AS warehouse_size,
+    "type" AS warehouse_type,
+    "state",
+    "owner"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "generation" = 2
+ORDER BY "name";
+
+-- Gen1 warehouses (candidates for upgrade to Gen2)
+SHOW WAREHOUSES;
+SELECT 
+    "name" AS warehouse_name,
+    "size" AS warehouse_size,
+    "type" AS warehouse_type,
+    "state",
+    "owner"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "generation" = 1
+ORDER BY "name";
+
+-- Warehouses count by tag name
+SELECT 
+    tr.TAG_DATABASE || '.' || tr.TAG_SCHEMA || '.' || tr.TAG_NAME AS full_tag_name,
+    COUNT(DISTINCT tr.OBJECT_NAME) AS warehouse_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES tr
+WHERE tr.DOMAIN = 'WAREHOUSE'
+  AND tr.OBJECT_DELETED IS NULL
+GROUP BY full_tag_name
+ORDER BY warehouse_count DESC;
+
+-- Warehouses count by tag name and value
+SELECT 
+    tr.TAG_DATABASE || '.' || tr.TAG_SCHEMA || '.' || tr.TAG_NAME AS full_tag_name,
+    tr.TAG_VALUE,
+    COUNT(DISTINCT tr.OBJECT_NAME) AS warehouse_count
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES tr
+WHERE tr.DOMAIN = 'WAREHOUSE'
+  AND tr.OBJECT_DELETED IS NULL
+GROUP BY full_tag_name, tr.TAG_VALUE
+ORDER BY full_tag_name, warehouse_count DESC;
+
+-- Tagged vs untagged warehouse count (real-time)
+WITH all_warehouses AS (
+    SELECT "name" AS warehouse_name FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+),
+tagged_warehouses AS (
+    SELECT DISTINCT OBJECT_NAME AS warehouse_name
+    FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+    WHERE DOMAIN = 'WAREHOUSE'
+      AND OBJECT_DELETED IS NULL
+)
+SELECT 
+    CASE WHEN tw.warehouse_name IS NOT NULL THEN 'Tagged' ELSE 'Untagged' END AS status,
+    COUNT(*) AS warehouse_count
+FROM (SHOW WAREHOUSES) aw
+LEFT JOIN tagged_warehouses tw ON aw."name" = tw.warehouse_name
+GROUP BY 1
+ORDER BY 1;
+
+-- List untagged warehouses
+WITH tagged_warehouses AS (
+    SELECT DISTINCT OBJECT_NAME AS warehouse_name
+    FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+    WHERE DOMAIN = 'WAREHOUSE'
+      AND OBJECT_DELETED IS NULL
+)
+SELECT 
+    w."name" AS warehouse_name,
+    w."size" AS warehouse_size,
+    w."type" AS warehouse_type,
+    w."owner" AS owner
+FROM (SHOW WAREHOUSES) w
+WHERE w."name" NOT IN (SELECT warehouse_name FROM tagged_warehouses)
+ORDER BY w."name";
+
+-- List warehouses with their tags
+SELECT 
+    tr.OBJECT_NAME AS warehouse_name,
+    tr.TAG_DATABASE || '.' || tr.TAG_SCHEMA || '.' || tr.TAG_NAME AS full_tag_name,
+    tr.TAG_VALUE
+FROM SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES tr
+WHERE tr.DOMAIN = 'WAREHOUSE'
+  AND tr.OBJECT_DELETED IS NULL
+ORDER BY tr.OBJECT_NAME, full_tag_name;
 ```
 
 ### Roles Count
