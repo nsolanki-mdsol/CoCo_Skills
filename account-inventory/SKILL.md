@@ -1,5 +1,5 @@
 ---
-name: account-inventory
+name: account-inventory-local
 description: |
   Snowflake account inventory and statistics for administration, audits, and capacity planning.
 
@@ -11,9 +11,10 @@ description: |
     Schemas - schemas, schema count
     Tables - tables, table count, objects
     Reader Accounts - reader, reader accounts, managed accounts
-    Shares - shares, inbound shares, outbound shares, data sharing, share count
+    Shares - shares, inbound shares, outbound shares, data sharing, share count, internal sharing, external sharing, marketplace listing, direct share, organization sharing
     Resource Monitors - resource monitor, monitors, credit quota
     Network Policies - network policy, network policies, IP whitelist, allowed IPs
+    Integrations - integrations, connectors, storage integration, API integration, catalog integration, notification, external access, SCIM, OAuth
     Tags - tags, tag count, tag references, tagged objects, sensitive data, PII, classification, tag values
     Object Types - object types, objects by database, objects by schema, procedures, functions, stages, streams, tasks, pipes
     Iceberg Tables - iceberg, iceberg tables, iceberg count, iceberg by database, iceberg by schema, catalog integration, snowflake managed, externally managed, glue, polaris
@@ -237,6 +238,88 @@ FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
 GROUP BY "kind"
 ORDER BY count DESC;
 
+-- Internal vs External sharing (by organization)
+-- Internal = same organization (RJXZPFF.*), External = other organizations
+SHOW SHARES;
+SELECT 
+    "kind",
+    CASE 
+        WHEN SPLIT_PART("owner_account", '.', 1) = SPLIT_PART(CURRENT_ACCOUNT(), '.', 1) 
+        THEN 'Internal (Same Org)'
+        ELSE 'External (Other Org)'
+    END AS sharing_type,
+    COUNT(*) AS share_count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+GROUP BY "kind", sharing_type
+ORDER BY "kind", sharing_type;
+
+-- Internal shares summary (within your organization)
+SHOW SHARES;
+SELECT 
+    "kind",
+    "owner_account",
+    COUNT(*) AS share_count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE SPLIT_PART("owner_account", '.', 1) = SPLIT_PART(CURRENT_ACCOUNT(), '.', 1)
+GROUP BY "kind", "owner_account"
+ORDER BY share_count DESC;
+
+-- External shares summary (from/to other organizations)
+SHOW SHARES;
+SELECT 
+    "kind",
+    "owner_account",
+    COUNT(*) AS share_count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE SPLIT_PART("owner_account", '.', 1) != SPLIT_PART(CURRENT_ACCOUNT(), '.', 1)
+GROUP BY "kind", "owner_account"
+ORDER BY share_count DESC;
+
+-- Inbound shares by source organization
+SHOW SHARES;
+SELECT 
+    SPLIT_PART("owner_account", '.', 1) AS source_org,
+    "owner_account" AS source_account,
+    COUNT(*) AS inbound_shares
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "kind" = 'INBOUND'
+GROUP BY source_org, source_account
+ORDER BY inbound_shares DESC;
+
+-- Outbound shares with consumer count
+SHOW SHARES;
+SELECT 
+    "name" AS share_name,
+    "database_name",
+    CASE 
+        WHEN "to" IS NULL OR "to" = '' THEN 0
+        WHEN "to" = '''TARGETED ACCOUNTS''' THEN -1  -- Marketplace listing
+        ELSE ARRAY_SIZE(SPLIT("to", ','))
+    END AS consumer_count,
+    CASE 
+        WHEN "listing_global_name" IS NOT NULL AND "listing_global_name" != '' 
+        THEN 'Marketplace Listing'
+        WHEN "to" IS NULL OR "to" = '' THEN 'No Consumers'
+        ELSE 'Direct Share'
+    END AS share_method
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "kind" = 'OUTBOUND'
+ORDER BY consumer_count DESC;
+
+-- Marketplace listings vs direct shares
+SHOW SHARES;
+SELECT 
+    CASE 
+        WHEN "listing_global_name" IS NOT NULL AND "listing_global_name" != '' 
+        THEN 'Marketplace Listing'
+        ELSE 'Direct Share'
+    END AS share_method,
+    COUNT(*) AS count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "kind" = 'OUTBOUND'
+GROUP BY share_method
+ORDER BY count DESC;
+
 -- Outbound shares (shared by this account)
 SHOW SHARES;
 SELECT 
@@ -337,6 +420,140 @@ FROM SNOWFLAKE.ACCOUNT_USAGE.USERS u
 LEFT JOIN TABLE(FLATTEN(input => PARSE_JSON('[]'))) p -- placeholder
 WHERE u.deleted_on IS NULL
 ORDER BY u.name;
+```
+
+### Integrations Count (Connectors)
+```sql
+-- Total integrations count
+SHOW INTEGRATIONS;
+SELECT COUNT(*) AS integration_count FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
+-- Integrations by type and category
+SHOW INTEGRATIONS;
+SELECT 
+    "type" AS integration_type,
+    "category",
+    COUNT(*) AS count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+GROUP BY "type", "category"
+ORDER BY count DESC;
+
+-- Integrations by category (summary)
+SHOW INTEGRATIONS;
+SELECT 
+    "category",
+    COUNT(*) AS count
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+GROUP BY "category"
+ORDER BY count DESC;
+
+-- Storage integrations (S3, Azure, GCS)
+SHOW INTEGRATIONS;
+SELECT 
+    "name",
+    "type",
+    "enabled",
+    "created_on",
+    "comment"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "category" = 'STORAGE'
+ORDER BY "created_on" DESC;
+
+-- Catalog integrations (Glue, Polaris, Object Store)
+SHOW INTEGRATIONS;
+SELECT 
+    "name",
+    "type",
+    "enabled",
+    "created_on",
+    "comment"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "category" = 'CATALOG'
+ORDER BY "created_on" DESC;
+
+-- API integrations (external functions)
+SHOW INTEGRATIONS;
+SELECT 
+    "name",
+    "type",
+    "enabled",
+    "created_on",
+    "comment"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "category" = 'API'
+ORDER BY "created_on" DESC;
+
+-- Notification integrations (email, SNS, webhook)
+SHOW INTEGRATIONS;
+SELECT 
+    "name",
+    "type",
+    "enabled",
+    "created_on",
+    "comment"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "category" = 'NOTIFICATION'
+ORDER BY "type", "created_on" DESC;
+
+-- Security integrations (SCIM, OAuth)
+SHOW INTEGRATIONS;
+SELECT 
+    "name",
+    "type",
+    "enabled",
+    "created_on",
+    "comment"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "category" = 'SECURITY'
+ORDER BY "created_on" DESC;
+
+-- External access integrations
+SHOW INTEGRATIONS;
+SELECT 
+    "name",
+    "type",
+    "enabled",
+    "created_on",
+    "comment"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "category" = 'EXTERNAL_ACCESS'
+ORDER BY "created_on" DESC;
+
+-- Disabled integrations
+SHOW INTEGRATIONS;
+SELECT 
+    "name",
+    "type",
+    "category",
+    "created_on",
+    "comment"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE "enabled" = 'false'
+ORDER BY "category", "name";
+
+-- Integrations with details
+SHOW INTEGRATIONS;
+SELECT 
+    "name",
+    "type",
+    "category",
+    "enabled",
+    "created_on",
+    "comment"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+ORDER BY "category", "type", "name";
+
+-- Recent integrations (last 30 days)
+SHOW INTEGRATIONS;
+SELECT 
+    "name",
+    "type",
+    "category",
+    "enabled",
+    "created_on"
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+WHERE TRY_TO_TIMESTAMP("created_on") > DATEADD(day, -30, CURRENT_TIMESTAMP())
+ORDER BY "created_on" DESC;
 ```
 
 ### Tags Count
