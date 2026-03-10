@@ -1,5 +1,5 @@
 ---
-name: account-inventory-local
+name: account-inventory
 description: | 
   Snowflake account inventory and statistics for administration, audits, and capacity planning.
   Topics:
